@@ -1,9 +1,9 @@
 # AS Paper MM — Avellaneda–Stoikov market making на живых данных Binance
 
-[![CI](https://github.com/__GH__/as-paper-mm/actions/workflows/ci.yml/badge.svg)](https://github.com/__GH__/as-paper-mm/actions/workflows/ci.yml)
-[![docs](https://img.shields.io/badge/docs-Doxygen-blue)](https://__GH__.github.io/as-paper-mm/)
+[![CI](https://github.com/spiralcrew/as-paper-mm/actions/workflows/ci.yml/badge.svg)](https://github.com/spiralcrew/as-paper-mm/actions/workflows/ci.yml)
+[![docs](https://img.shields.io/badge/docs-Doxygen-blue)](https://spiralcrew.github.io/as-paper-mm/)
 
-**Документация (Doxygen, GitHub Pages): https://__GH__.github.io/as-paper-mm/**
+**Документация (Doxygen, GitHub Pages): https://spiralcrew.github.io/as-paper-mm/**
 
 ## Что делает программа
 
