@@ -1,0 +1,99 @@
+# CI/CD: сборка → unit-тесты → прогон на данных → бенчмарк → Doxygen → GitHub Pages.
+# Запускается на каждый push и pull request; Pages публикуется только из ветки main.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-benchmark:
+    name: Build, test, benchmark
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ninja-build
+          g++ --version | head -1
+          cmake --version | head -1
+
+      - name: Configure (CMake, Release, -Werror)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DASMM_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit tests (GoogleTest via ctest)
+        run: ctest --test-dir build --output-on-failure --output-junit junit.xml
+
+      - name: Replay smoke run on recorded Binance BTCUSDT data
+        run: ./build/asmm --input data/sample_btcusdt.jsonl --quiet-fills --report 15
+
+      - name: Benchmark (Google Benchmark)
+        run: |
+          ./build/bench/asmm_bench --benchmark_min_time=0.5s --benchmark_repetitions=3 \
+            --benchmark_report_aggregates_only=true \
+            --benchmark_out=benchmark.json --benchmark_out_format=json | tee benchmark.txt
+          {
+            echo "## Benchmark results"
+            echo '```'
+            cat benchmark.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test and benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: |
+            build/junit.xml
+            benchmark.json
+          if-no-files-found: ignore
+
+  docs:
+    name: Doxygen docs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Doxygen
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends doxygen graphviz
+          doxygen --version
+
+      - name: Generate HTML
+        run: doxygen Doxyfile
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/doxygen/html
+
+  deploy-pages:
+    name: Deploy docs to GitHub Pages
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [build-test-benchmark, docs]
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

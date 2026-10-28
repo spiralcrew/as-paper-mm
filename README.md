@@ -1,9 +1,9 @@
 # AS Paper MM — Avellaneda–Stoikov market making на живых данных Binance
 
-[![pipeline](https://gitlab.com/spiralcrew2/as-paper-mm/badges/main/pipeline.svg)](https://gitlab.com/spiralcrew2/as-paper-mm/-/pipelines)
-[![docs](https://img.shields.io/badge/docs-Doxygen-blue)](https://spiralcrew2.gitlab.io/as-paper-mm/)
+[![CI](https://github.com/__GH__/as-paper-mm/actions/workflows/ci.yml/badge.svg)](https://github.com/__GH__/as-paper-mm/actions/workflows/ci.yml)
+[![docs](https://img.shields.io/badge/docs-Doxygen-blue)](https://__GH__.github.io/as-paper-mm/)
 
-**Документация (Doxygen, GitLab Pages): https://spiralcrew2.gitlab.io/as-paper-mm/**
+**Документация (Doxygen, GitHub Pages): https://__GH__.github.io/as-paper-mm/**
 
 ## Что делает программа
 
@@ -65,7 +65,7 @@ bid    = r − spread/2,   ask = r + spread/2
 | `scripts/` | `binance_feed.py` — стример Binance → stdout |
 | `data/` | записанные 90 с BTCUSDT для тестов, бенчмарка и реплея |
 | `docs/` | описание модели и решений |
-| `.gitlab-ci.yml` | CI/CD: build → test → benchmark → pages |
+| `.github/workflows/ci.yml` | CI/CD (GitHub Actions): build → test → benchmark → Pages |
 | `Doxyfile` | конфигурация Doxygen |
 | `AGENTS.md`, `CLAUDE.md` | инструкции для ИИ-агентов |
 
@@ -130,9 +130,16 @@ doxygen Doxyfile        # → build/doxygen/html/index.html
 
 ## CI/CD
 
-GitLab CI на каждый push: `build` (GCC, Release, `-Werror`) → `unit_tests` (ctest + JUnit-отчёт)
-и `replay_smoke` (прогон `asmm` на сэмпле) → `benchmark` (результаты в журнале job'а и
-`benchmark.json`) → `pages` (Doxygen → GitLab Pages, только ветка `main`).
+GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) на каждый push и pull request:
+
+| Job / шаг | Что делает |
+|---|---|
+| `Build, test, benchmark` → Configure, Build | CMake + GCC, Release, `-Werror` |
+| → Unit tests | `ctest` (GoogleTest), JUnit-отчёт в артефактах |
+| → Replay smoke run | прогон `asmm` на записанных данных Binance |
+| → Benchmark | Google Benchmark; результат в журнале шага и в Summary запуска, `benchmark.json` в артефактах |
+| `Doxygen docs` | генерация HTML-документации |
+| `Deploy docs to GitHub Pages` | публикация на GitHub Pages (только ветка `main`) |
 
 ## Лицензия
 

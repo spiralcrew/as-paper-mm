@@ -1,5 +1,5 @@
 # Doxygen: HTML-документация проекта. Генерация: `doxygen Doxyfile` → build/doxygen/html
-# Публикуется в GitLab Pages job'ом `pages` (.gitlab-ci.yml).
+# Публикуется в GitHub Pages workflow'ом .github/workflows/ci.yml.
 
 PROJECT_NAME           = "AS Paper MM"
 PROJECT_NUMBER         = 0.1.0

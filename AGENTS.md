@@ -8,7 +8,7 @@ Claude Code подключает этот файл через `CLAUDE.md` (`@AGE
 `as-paper-mm` — C++20 маркет-мейкер по модели Avellaneda–Stoikov (2008) на живых данных
 Binance Spot BTCUSDT (WebSocket `btcusdt@bookTicker` + `btcusdt@trade`) с **симуляцией
 исполнения** (paper trading, без реальных денег и ордеров). Учебный проект курса по C++:
-сборка, тесты, бенчмарк и документация автоматизированы в GitLab CI/CD.
+сборка, тесты, бенчмарк и документация автоматизированы в GitHub Actions (CI/CD) и GitHub Pages.
 
 ## Структура
 
@@ -22,7 +22,7 @@ Binance Spot BTCUSDT (WebSocket `btcusdt@bookTicker` + `btcusdt@trade`) с **с�
 | `scripts/binance_feed.py` | стример Binance → stdout |
 | `data/sample_btcusdt.jsonl` | записанные 90 с реальных данных; используются тестами и бенчмарком |
 | `docs/` | описание модели, решений, ограничений |
-| `.gitlab-ci.yml`, `Doxyfile` | CI/CD и документация |
+| `.github/workflows/ci.yml`, `Doxyfile` | CI/CD и документация |
 
 ## Команды
 
@@ -61,7 +61,7 @@ doxygen Doxyfile   # → build/doxygen/html
 ## Ограничения для агента
 
 - **Перед завершением задачи собери проект и запусти тесты** (команды выше); все тесты должны проходить.
-- **Не меняй CI/CD** (`.gitlab-ci.yml`) и `Doxyfile` без явного запроса.
+- **Не меняй CI/CD** (`.github/workflows/`) и `Doxyfile` без явного запроса.
 - Не добавляй торговлю реальными деньгами, приватные эндпоинты Binance, API-ключи и секреты в репозиторий.
 - Не перезаписывай `data/sample_btcusdt.jsonl` без запроса: от него зависят тесты и бенчмарк.
 - Не добавляй зависимости, кроме подключаемых через CMake `FetchContent` с фиксированной версией.
