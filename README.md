@@ -125,7 +125,7 @@ ctest --test-dir build --output-on-failure
 ## Документация
 
 ```bash
-mkdir -p build/doxygen && mkdir -p build/doxygen && doxygen Doxyfile   # → build/doxygen/html/index.html
+mkdir -p build/doxygen && doxygen Doxyfile   # → build/doxygen/html/index.html
 ```
 
 ## CI/CD
