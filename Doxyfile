@@ -1,0 +1,44 @@
+# Doxygen: HTML-документация проекта. Генерация: `doxygen Doxyfile` → build/doxygen/html
+# Публикуется в GitLab Pages job'ом `pages` (.gitlab-ci.yml).
+
+PROJECT_NAME           = "AS Paper MM"
+PROJECT_NUMBER         = 0.1.0
+PROJECT_BRIEF          = "Avellaneda–Stoikov paper market making на живых данных Binance BTCUSDT"
+OUTPUT_DIRECTORY       = build/doxygen
+OUTPUT_LANGUAGE        = Russian
+INPUT_ENCODING         = UTF-8
+
+INPUT                  = README.md docs include src app
+FILE_PATTERNS          = *.hpp *.cpp *.md
+RECURSIVE              = YES
+USE_MDFILE_AS_MAINPAGE = README.md
+STRIP_FROM_PATH        = .
+STRIP_FROM_INC_PATH    = include
+FULL_PATH_NAMES        = YES
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_ANON_NSPACES   = NO
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+JAVADOC_AUTOBRIEF      = YES
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 3
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_TREEVIEW      = YES
+USE_MATHJAX            = YES
+GENERATE_LATEX         = NO
+
+HAVE_DOT               = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = YES
+INCLUDE_GRAPH          = YES
+DOT_IMAGE_FORMAT       = svg
+
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_AS_ERROR          = NO

@@ -1,0 +1,12 @@
+build/
+cmake-build-*/
+out/
+public/
+.vs/
+.vscode/
+.idea/
+.venv/
+__pycache__/
+*.pyc
+compile_commands.json
+benchmark.json
