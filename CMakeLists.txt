@@ -67,6 +67,7 @@ endif()
 find_package(Doxygen QUIET)
 if(DOXYGEN_FOUND)
     add_custom_target(docs
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/build/doxygen
         COMMAND ${DOXYGEN_EXECUTABLE} ${PROJECT_SOURCE_DIR}/Doxyfile
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         COMMENT "Generating Doxygen HTML into build/doxygen/html"

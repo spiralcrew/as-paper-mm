@@ -42,7 +42,7 @@ ctest --test-dir build --output-on-failure
 python scripts/binance_feed.py | ./build/asmm
 
 # документация
-doxygen Doxyfile   # → build/doxygen/html
+mkdir -p build/doxygen && doxygen Doxyfile   # → build/doxygen/html
 ```
 
 ## Правила оформления кода

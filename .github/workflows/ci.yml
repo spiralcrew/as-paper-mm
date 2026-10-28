@@ -19,7 +19,7 @@ jobs:
     name: Build, test, benchmark
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build tools
         run: |
@@ -66,7 +66,7 @@ jobs:
     name: Doxygen docs
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Doxygen
         run: |
@@ -75,7 +75,10 @@ jobs:
           doxygen --version
 
       - name: Generate HTML
-        run: doxygen Doxyfile
+        run: |
+          mkdir -p build/doxygen
+          doxygen Doxyfile
+          test -f build/doxygen/html/index.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
