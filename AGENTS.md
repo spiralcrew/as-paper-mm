@@ -6,8 +6,11 @@ Claude Code подключает этот файл через `CLAUDE.md` (`@AGE
 ## Назначение проекта
 
 `as-paper-mm` — C++20 маркет-мейкер по модели Avellaneda–Stoikov (2008) на живых данных
-Binance Spot BTCUSDT (WebSocket `btcusdt@bookTicker` + `btcusdt@trade`) с **симуляцией
-исполнения** (paper trading, без реальных денег и ордеров). Учебный проект курса по C++:
+Binance Spot BTCUSDT (WebSocket `bookTicker` + `trade` + `depth@100ms`, REST-снимок стакана) с
+**симуляцией исполнения** (paper trading, без реальных денег и ордеров): локальная книга
+заявок, место в очереди, отмены, задержка, рыночные заявки с проскальзыванием, калибровка
+λ(δ) = A·e^(−kδ) по ленте сделок и воспроизведение эксперимента статьи (`asmm_sim`).
+Учебный проект курса по C++:
 сборка, тесты, бенчмарк и документация автоматизированы в GitHub Actions (CI/CD) и GitHub Pages.
 
 ## Структура
@@ -15,12 +18,13 @@ Binance Spot BTCUSDT (WebSocket `btcusdt@bookTicker` + `btcusdt@trade`) с **с�
 | Путь | Что там |
 |---|---|
 | `include/asmm/*.hpp` | публичный API библиотеки `asmm_core` (Doxygen-комментарии обязательны) |
-| `src/*.cpp` | реализация: `avellaneda_stoikov`, `volatility`, `paper_exchange`, `binance_parser`, `engine` |
-| `app/main.cpp` | CLI `asmm`: читает JSON Lines из stdin/файла |
+| `src/*.cpp` | реализация: `avellaneda_stoikov`, `volatility`, `intensity`, `order_book`, `paper_exchange`, `binance_parser`, `engine`, `as_simulation` |
+| `app/main.cpp` | CLI `asmm`: paper trading, читает JSON Lines из stdin/файла |
+| `app/as_simulate.cpp` | CLI `asmm_sim`: эксперимент §3.3 статьи (таблицы 1–3) |
 | `tests/` | GoogleTest, по файлу `test_<модуль>.cpp` на модуль |
 | `bench/` | Google Benchmark (`bench_main.cpp`) |
-| `scripts/binance_feed.py` | стример Binance → stdout |
-| `data/sample_btcusdt.jsonl` | записанные 90 с реальных данных; используются тестами и бенчмарком |
+| `scripts/binance_feed.py` | сборщик Binance → stdout и/или ротируемые файлы |
+| `data/sample_btcusdt.jsonl` | записанные 5 мин реальных данных со стаканом; используются тестами и бенчмарком |
 | `docs/` | описание модели, решений, ограничений |
 | `.github/workflows/ci.yml`, `Doxyfile` | CI/CD и документация |
 
@@ -41,6 +45,9 @@ ctest --test-dir build --output-on-failure
 ./build/asmm --input data/sample_btcusdt.jsonl
 python scripts/binance_feed.py | ./build/asmm
 
+# эксперимент из статьи
+./build/asmm_sim
+
 # документация
 mkdir -p build/doxygen && doxygen Doxyfile   # → build/doxygen/html
 ```
@@ -54,7 +61,8 @@ mkdir -p build/doxygen && doxygen Doxyfile   # → build/doxygen/html
 - Каждый публичный тип и функция в `include/` — с Doxygen-комментарием (`@brief`, единицы измерения, исключения).
 - Единицы измерения явно: цены в USDT, объёмы в BTC, время в мс (`*_ms`) или с (`*_sec`), σ в USDT/√s.
 - Ядро (`asmm_core`) без сетевого I/O и без внешних зависимостей; сеть — только в `scripts/`.
-- Неверные параметры — `std::invalid_argument`; горячий путь (`parse_binance_message`, `on_book`) без аллокаций.
+- Неверные параметры — `std::invalid_argument`; горячий путь для `bookTicker`/`trade` (`parse_binance_message`, `on_book`) без аллокаций; стакан выделяет только векторы уровней.
+- Цены уровней книги сравниваются в целых тиках или с допуском `kPriceEps`, не через `==` на double.
 - Новая логика — с unit-тестом в `tests/`; изменения горячего пути — с бенчмарком в `bench/`.
 - Коммиты: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`, `ci:`.
 

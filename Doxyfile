@@ -2,7 +2,7 @@
 # Публикуется в GitHub Pages workflow'ом .github/workflows/ci.yml.
 
 PROJECT_NAME           = "AS Paper MM"
-PROJECT_NUMBER         = 0.1.0
+PROJECT_NUMBER         = 0.2.0
 PROJECT_BRIEF          = "Avellaneda–Stoikov paper market making на живых данных Binance BTCUSDT"
 OUTPUT_DIRECTORY       = build/doxygen
 OUTPUT_LANGUAGE        = Russian

@@ -8,64 +8,84 @@
 ## Что делает программа
 
 `asmm` — маркет-мейкер на C++20, который в реальном времени получает рыночные данные
-**BTC/USDT со спота Binance** и котирует по модели **Avellaneda–Stoikov (2008)**.
-Исполнение заявок **симулируется** (paper trading): реальных денег, ключей API и ордеров нет.
-
-Конвейер на каждом сообщении:
+**BTC/USDT со спота Binance** (лучшие цены, сделки, полный стакан) и котирует по модели
+**Avellaneda–Stoikov (2008)**. Исполнение заявок **симулируется** (paper trading): реальных
+денег, ключей API и ордеров нет. Симулятор учитывает место в очереди уровня, отмены чужих
+заявок, задержку выставления/отмены и проскальзывание рыночных заявок по стакану.
 
 ```
-Binance WebSocket ──► scripts/binance_feed.py ──stdin──► asmm
- (bookTicker+trade)    (+ recv_ms, JSON Lines)            │
-                                                         ├─ парсер Binance JSON
-                                                         ├─ EWMA-волатильность σ
-                                                         ├─ котировки AS: r, спред, bid/ask
-                                                         ├─ округление к тику, post-only, лимит |q|
-                                                         └─ виртуальная биржа: исполнение по ленте
-                                                            сделок, позиция, кэш, PnL
+Binance Spot ── WebSocket bookTicker + trade + depth@100ms ─┐
+             └─ REST /api/v3/depth (снимок) ─────────────────┤
+                                                             ▼
+            scripts/binance_feed.py  (recv_ms, синхронизация стакана, запись в файлы)
+                                                             │ JSON Lines (stdin / файл)
+                                                             ▼
+ asmm ─ парсер ─► локальная книга L2 ─────────────┐
+                ─► EWMA σ                          │
+                ─► калибровка λ(δ) = A·e^(−kδ) ─► котировки AS: r, спред, bid/ask
+                                                   │  тик, post-only, лимит |q|, гистерезис
+                                                   ▼
+               виртуальная биржа: очередь FIFO, отмены, задержка, сделки → исполнения,
+               рыночная ликвидация с проскальзыванием, позиция, кэш, PnL
 ```
 
 ### Откуда данные
 
-Публичный combined WebSocket-стрим **Binance Spot** (ключи не нужны):
+Публичные стримы **Binance Spot**, ключи не нужны:
 
 ```
-wss://stream.binance.com:9443/stream?streams=btcusdt@bookTicker/btcusdt@trade
+wss://stream.binance.com:9443/stream?streams=btcusdt@bookTicker/btcusdt@trade/btcusdt@depth@100ms
+https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=1000
 ```
 
 - `btcusdt@bookTicker` — лучшие бид/аск в реальном времени;
-- `btcusdt@trade` — лента сделок (цена, объём, сторона агрессора).
+- `btcusdt@trade` — лента сделок (цена, объём, сторона агрессора);
+- `btcusdt@depth@100ms` + REST-снимок — полная книга заявок по правилам Binance
+  («How to manage a local order book correctly»).
 
 Документация API: <https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams>.
 На Binance.com нет спот-пары BTC/USD — долларовая цена BTC берётся из **BTCUSDT**
-(самая ликвидная пара). Фидер поддерживает `--symbol`/`--base-url` (например, Binance.US `btcusd`).
+(самая ликвидная пара). Сборщик поддерживает `--symbol`, `--ws-url`, `--rest-url`.
 
-### Модель
+### Модель (Avellaneda & Stoikov, 2008)
 
 ```
-r      = s − q·γ·σ²·τ                       резервационная цена
-spread = γ·σ²·τ + (2/γ)·ln(1 + γ/k)          оптимальный спред
+r      = s − q·γ·σ²·τ                     резервационная цена      (3.17)
+spread = γ·σ²·τ + (2/γ)·ln(1 + γ/k)        оптимальный спред        (3.18)
 bid    = r − spread/2,   ask = r + spread/2
+λ(δ)   = A·e^(−kδ)                         интенсивность исполнения (3.8)
 ```
 
-`s` — mid, `q` — инвентарь в лотах, `γ` — неприятие риска, `σ` — волатильность (USDT/√s),
-`τ` — время до конца сессии, `k` — затухание интенсивности исполнения.
-Симуляция исполнения: наш бид исполняется сделкой агрессора-продавца по цене ≤ бида
-(`touch`) или < бида (`through`), аск — симметрично. Подробно, с ограничениями и
-литературой: [docs/model.md](docs/model.md).
+`s` — mid, `q` — инвентарь в лотах, `γ` — неприятие риска, `σ` — волатильность (EWMA, USDT/√s),
+`τ` — время до конца сессии, `k`, `A` — калибруются онлайн по ленте сделок.
+`asmm_sim` воспроизводит численный эксперимент статьи (§3.3, таблицы 1–3); результаты
+совпадают со статьёй в пределах шума Монте-Карло, кроме одной ячейки, — подробно, с
+таблицей сравнения, ограничениями и литературой: **[docs/model.md](docs/model.md)**.
+
+### Симуляция исполнения
+
+| Эффект | Как моделируется |
+|---|---|
+| Очередь | встаём в хвост видимого объёма уровня; сделки по нашей цене сначала съедают очередь перед нами |
+| Пробой уровня | сделка хуже нашей цены — уровень исчерпан, мы исполнены полностью |
+| Отмены чужих заявок | уменьшение уровня без сделок двигает нас вперёд пропорционально (`proportional`) или не двигает (`pessimistic`) |
+| Задержка | заявка встаёт и снимается через `--latency-ms`; до этого старая котировка может быть исполнена |
+| Проскальзывание | рыночная ликвидация проходит по уровням стакана: VWAP, число уровней, `|VWAP − mid|·qty`, комиссия тейкера |
+| Сохранение очереди | заявка не переставляется, если цена сдвинулась меньше чем на `--requote-ticks` |
 
 ## Структура
 
 | Путь | Содержимое |
 |---|---|
 | `include/asmm/` | публичные заголовки библиотеки `asmm_core` |
-| `src/` | реализация: модель AS, волатильность, виртуальная биржа, парсер, движок |
-| `app/` | CLI `asmm` (`main.cpp`) |
+| `src/` | реализация: модель AS, волатильность, калибровка λ(δ), книга L2, виртуальная биржа, парсер, движок, эксперимент статьи |
+| `app/` | CLI `asmm` (paper trading) и `asmm_sim` (эксперимент статьи) |
 | `tests/` | unit-тесты (GoogleTest) |
 | `bench/` | бенчмарки (Google Benchmark) |
-| `scripts/` | `binance_feed.py` — стример Binance → stdout |
-| `data/` | записанные 90 с BTCUSDT для тестов, бенчмарка и реплея |
-| `docs/` | описание модели и решений |
-| `.github/workflows/ci.yml` | CI/CD (GitHub Actions): build → test → benchmark → Pages |
+| `scripts/` | `binance_feed.py` — сборщик данных Binance |
+| `data/` | 5 минут реальных данных BTCUSDT со стаканом — для тестов, бенчмарка и реплея |
+| `docs/` | описание модели, калибровки, симуляции исполнения и проверки |
+| `.github/workflows/ci.yml` | CI/CD (GitHub Actions): build → test → replay → paper reproduction → benchmark → Pages |
 | `Doxyfile` | конфигурация Doxygen |
 | `AGENTS.md`, `CLAUDE.md` | инструкции для ИИ-агентов |
 
@@ -83,29 +103,51 @@ cmake --build build --parallel
 
 ## Запуск
 
-Живые данные (нужен Python 3.9+):
+Сборщику нужен Python 3.9+:
 
 ```bash
 pip install -r scripts/requirements.txt
-python scripts/binance_feed.py | ./build/asmm
 ```
 
-Реплей записанных данных:
+Живой paper trading:
 
 ```bash
+python scripts/binance_feed.py | ./build/asmm --latency-ms 50
+```
+
+Живой paper trading с записью данных (файлы ротируются раз в час, каждый начинается со снимка стакана):
+
+```bash
+python scripts/binance_feed.py --record data/raw | ./build/asmm --fills-csv fills.csv --state-csv state.csv
+```
+
+Только сбор данных и реплей записанного файла:
+
+```bash
+python scripts/binance_feed.py --no-stdout --record data/raw --gzip
 ./build/asmm --input data/sample_btcusdt.jsonl
 ```
 
-Параметры: `./build/asmm --help` (`--gamma`, `--k`, `--horizon`, `--qty`, `--max-inv`,
-`--fill-model touch|through`, `--fee`, `--report`, ...). Пример вывода:
+Эксперимент из статьи:
 
-```
-FILL SELL 0.001000 BTC @ 80568.56 (fee 0.000000) | q=-1.21 lots
-[1793198736194] mid=80596.01 sigma=2.432 tau=14.6s r=80596.15 bid=80595.60 ask=80596.70 q=-1.67 lots pnl=-0.0275 fills=17
-=== Paper trading summary (no real funds) ===
+```bash
+./build/asmm_sim
 ```
 
-Записать свой сэмпл: `python scripts/binance_feed.py --duration 90 > data/sample_btcusdt.jsonl`.
+Основные параметры `asmm` (полный список — `./build/asmm --help`):
+
+| Параметр | По умолчанию | Смысл |
+|---|---|---|
+| `--gamma` | 0.001 | неприятие риска γ, 1/USDT |
+| `--horizon` | 30 | длина сессии T, с |
+| `--k`, `--no-calibrate` | 2.0, калибровка вкл. | k до калибровки / зафиксировать k |
+| `--qty`, `--max-inv` | 0.001 BTC, 5 лотов | размер лота и лимит инвентаря |
+| `--fill-model` | queue | `queue`, `touch`, `through` |
+| `--cancel-model` | proportional | `proportional`, `pessimistic` |
+| `--latency-ms` | 0 | задержка наших заявок |
+| `--requote-ticks` | 1 | гистерезис перестановки |
+| `--fee`, `--taker-fee` | 0, 0.001 | комиссии мейкера и тейкера |
+| `--liquidate-session` | выкл. | закрывать позицию в конце каждой сессии |
 
 ## Тесты
 
@@ -113,14 +155,20 @@ FILL SELL 0.001000 BTC @ 80568.56 (fee 0.000000) | q=-1.21 lots
 ctest --test-dir build --output-on-failure
 ```
 
+Покрывают формулы AS, калибровку λ(δ) на синтетике с известными A и k, синхронизацию книги
+(включая разрывы), очередь, отмены, задержку, проскальзывание, движок. На реальных данных
+проверяется, что локальная книга совпадает с bookTicker во всех точках с одинаковым `update_id`.
+Таблица 1 статьи воспроизводится с допусками.
+
 ## Бенчмарк
 
 ```bash
 ./build/bench/asmm_bench
 ```
 
-Меряет `compute_quotes`, округление котировок, парсинг `bookTicker`/`trade`, обработку
-одного обновления стакана движком и полный реплей записанного сэмпла.
+Меряет котировки AS, парсинг `bookTicker`/`trade`/`depthUpdate`, применение обновления к книге
+из 1000 уровней, обработку сделки моделью очереди, движок на одном обновлении, полный реплей
+сэмпла и эксперимент статьи (1000 траекторий).
 
 ## Документация
 
@@ -136,7 +184,8 @@ GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) на ка�
 |---|---|
 | `Build, test, benchmark` → Configure, Build | CMake + GCC, Release, `-Werror` |
 | → Unit tests | `ctest` (GoogleTest), JUnit-отчёт в артефактах |
-| → Replay smoke run | прогон `asmm` на записанных данных Binance |
+| → Paper trading replay | прогон `asmm` на записанных данных Binance (очередь, задержка 50 мс) |
+| → Avellaneda-Stoikov paper reproduction | `asmm_sim`: таблицы 1–3 статьи |
 | → Benchmark | Google Benchmark; результат в журнале шага и в Summary запуска, `benchmark.json` в артефактах |
 | `Doxygen docs` | генерация HTML-документации |
 | `Deploy docs to GitHub Pages` | публикация на GitHub Pages (только ветка `main`) |

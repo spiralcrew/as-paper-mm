@@ -1,12 +1,13 @@
 /**
  * @file binance_parser.cpp
- * @brief Минимальный парсер JSON-сообщений Binance без аллокаций.
+ * @brief Минимальный парсер JSON-сообщений Binance.
  */
 #include "asmm/binance_parser.hpp"
 
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <system_error>
 #include <version>
 
@@ -19,11 +20,11 @@ bool is_space(char c) noexcept {
 }
 
 /**
- * Найти значение плоского поля `"key": value` и вернуть его текст без кавычек.
+ * Найти поле `"key": value` и вернуть позицию начала значения.
  * Ключ должен быть окружён кавычками и сразу за ним идти двоеточие, поэтому
  * `"b"` не совпадёт с `"B"` или с `"bookTicker"`.
  */
-std::optional<std::string_view> find_field(std::string_view json, std::string_view key) noexcept {
+std::optional<std::size_t> find_value(std::string_view json, std::string_view key) noexcept {
     std::size_t pos = 0;
     while ((pos = json.find(key, pos)) != std::string_view::npos) {
         const std::size_t end = pos + key.size();
@@ -36,22 +37,36 @@ std::optional<std::string_view> find_field(std::string_view json, std::string_vi
             if (v >= json.size()) {
                 return std::nullopt;
             }
-            if (json[v] == '"') {
-                const std::size_t close = json.find('"', v + 1);
-                if (close == std::string_view::npos) {
-                    return std::nullopt;
-                }
-                return json.substr(v + 1, close - v - 1);
-            }
-            std::size_t e = v;
-            while (e < json.size() && json[e] != ',' && json[e] != '}' && !is_space(json[e])) {
-                ++e;
-            }
-            return json.substr(v, e - v);
+            return v;
         }
         pos = end;
     }
     return std::nullopt;
+}
+
+/// Значение плоского поля (строка без кавычек, число или литерал).
+std::optional<std::string_view> find_field(std::string_view json, std::string_view key) noexcept {
+    const auto start = find_value(json, key);
+    if (!start) {
+        return std::nullopt;
+    }
+    const std::size_t v = *start;
+    if (json[v] == '"') {
+        const std::size_t close = json.find('"', v + 1);
+        if (close == std::string_view::npos) {
+            return std::nullopt;
+        }
+        return json.substr(v + 1, close - v - 1);
+    }
+    if (json[v] == '[' || json[v] == '{') {
+        return std::nullopt;
+    }
+    std::size_t e = v;
+    while (e < json.size() && json[e] != ',' && json[e] != '}' && json[e] != ']' &&
+           !is_space(json[e])) {
+        ++e;
+    }
+    return json.substr(v, e - v);
 }
 
 bool to_double(std::string_view s, double& out) noexcept {
@@ -98,6 +113,66 @@ bool ends_with(std::string_view s, std::string_view suffix) noexcept {
     return s.size() >= suffix.size() && s.substr(s.size() - suffix.size()) == suffix;
 }
 
+void skip_spaces(std::string_view json, std::size_t& i) noexcept {
+    while (i < json.size() && is_space(json[i])) {
+        ++i;
+    }
+}
+
+bool read_string(std::string_view json, std::size_t& i, std::string_view& out) noexcept {
+    skip_spaces(json, i);
+    if (i >= json.size() || json[i] != '"') {
+        return false;
+    }
+    const std::size_t close = json.find('"', i + 1);
+    if (close == std::string_view::npos) {
+        return false;
+    }
+    out = json.substr(i + 1, close - i - 1);
+    i = close + 1;
+    return true;
+}
+
+bool expect(std::string_view json, std::size_t& i, char c) noexcept {
+    skip_spaces(json, i);
+    if (i >= json.size() || json[i] != c) {
+        return false;
+    }
+    ++i;
+    return true;
+}
+
+/// Разобрать массив уровней `[["price","qty"], ...]` из поля `key`.
+bool parse_levels(std::string_view json, std::string_view key, std::vector<PriceLevel>& out) {
+    const auto start = find_value(json, key);
+    if (!start || json[*start] != '[') {
+        return false;
+    }
+    std::size_t i = *start + 1;
+    while (true) {
+        skip_spaces(json, i);
+        if (i >= json.size()) {
+            return false;
+        }
+        if (json[i] == ']') {
+            return true;
+        }
+        if (json[i] == ',') {
+            ++i;
+            continue;
+        }
+        std::string_view price_text;
+        std::string_view qty_text;
+        PriceLevel level;
+        if (!expect(json, i, '[') || !read_string(json, i, price_text) || !expect(json, i, ',') ||
+            !read_string(json, i, qty_text) || !expect(json, i, ']') ||
+            !to_double(price_text, level.price) || !to_double(qty_text, level.qty)) {
+            return false;
+        }
+        out.push_back(level);
+    }
+}
+
 std::optional<ParsedMessage> parse_book(std::string_view data, std::int64_t recv_ms) noexcept {
     ParsedMessage msg;
     msg.type = MessageType::BookTicker;
@@ -131,9 +206,44 @@ std::optional<ParsedMessage> parse_trade(std::string_view data, std::int64_t rec
     return msg;
 }
 
-}  // namespace
+std::optional<ParsedMessage> parse_depth_update(std::string_view data, std::int64_t recv_ms) {
+    ParsedMessage msg;
+    msg.type = MessageType::DepthUpdate;
+    asmm::DepthUpdate& d = msg.depth;
+    if (!get_int(data, "U", d.first_update_id) || !get_int(data, "u", d.final_update_id) ||
+        d.first_update_id > d.final_update_id || !parse_levels(data, "b", d.bids) ||
+        !parse_levels(data, "a", d.asks)) {
+        return std::nullopt;
+    }
+    std::int64_t event_time = 0;
+    get_int(data, "E", event_time);
+    d.ts_ms = recv_ms > 0 ? recv_ms : event_time;
+    return msg;
+}
 
-std::optional<ParsedMessage> parse_binance_message(std::string_view line) noexcept {
+std::optional<ParsedMessage> parse_depth_snapshot(std::string_view data, std::int64_t recv_ms) {
+    ParsedMessage msg;
+    msg.type = MessageType::DepthSnapshot;
+    asmm::DepthSnapshot& s = msg.snapshot;
+    if (!get_int(data, "lastUpdateId", s.last_update_id) || !parse_levels(data, "bids", s.bids) ||
+        !parse_levels(data, "asks", s.asks)) {
+        return std::nullopt;
+    }
+    s.ts_ms = recv_ms;
+    return msg;
+}
+
+/// `<symbol>@depth` или `<symbol>@depth@100ms|1000ms` (diff depth, не partial depth).
+bool is_diff_depth_stream(std::string_view stream) noexcept {
+    const std::size_t pos = stream.find("@depth");
+    if (pos == std::string_view::npos) {
+        return false;
+    }
+    const std::string_view rest = stream.substr(pos + 6);
+    return rest.empty() || rest == "@100ms" || rest == "@1000ms";
+}
+
+std::optional<ParsedMessage> parse_impl(std::string_view line) {
     std::int64_t recv_ms = 0;
     get_int(line, "recv_ms", recv_ms);
 
@@ -141,11 +251,11 @@ std::optional<ParsedMessage> parse_binance_message(std::string_view line) noexce
     std::string_view stream;
     if (const auto s = find_field(line, "stream")) {
         stream = *s;
-        const std::size_t data_pos = line.find("\"data\":");
-        if (data_pos == std::string_view::npos) {
+        const auto data_pos = find_value(line, "data");
+        if (!data_pos) {
             return std::nullopt;
         }
-        data = line.substr(data_pos + 7);
+        data = line.substr(*data_pos);
     }
 
     if (!stream.empty()) {
@@ -158,10 +268,16 @@ std::optional<ParsedMessage> parse_binance_message(std::string_view line) noexce
         if (ends_with(stream, "@aggTrade")) {
             return parse_trade(data, recv_ms, true);
         }
+        if (ends_with(stream, "@depthSnapshot")) {
+            return parse_depth_snapshot(data, recv_ms);
+        }
+        if (is_diff_depth_stream(stream)) {
+            return parse_depth_update(data, recv_ms);
+        }
         return std::nullopt;
     }
 
-    // Сырое сообщение одиночного стрима: у сделок есть поле "e", у bookTicker — нет.
+    // Сырое сообщение одиночного стрима: у событий есть поле "e", у bookTicker и снимка — нет.
     if (const auto event = find_field(data, "e")) {
         if (*event == "trade") {
             return parse_trade(data, recv_ms, false);
@@ -169,9 +285,25 @@ std::optional<ParsedMessage> parse_binance_message(std::string_view line) noexce
         if (*event == "aggTrade") {
             return parse_trade(data, recv_ms, true);
         }
+        if (*event == "depthUpdate") {
+            return parse_depth_update(data, recv_ms);
+        }
         return std::nullopt;
     }
+    if (find_value(data, "lastUpdateId")) {
+        return parse_depth_snapshot(data, recv_ms);
+    }
     return parse_book(data, recv_ms);
+}
+
+}  // namespace
+
+std::optional<ParsedMessage> parse_binance_message(std::string_view line) noexcept {
+    try {
+        return parse_impl(line);
+    } catch (const std::bad_alloc&) {
+        return std::nullopt;
+    }
 }
 
 }  // namespace asmm

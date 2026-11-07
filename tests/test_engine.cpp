@@ -2,8 +2,11 @@
 
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "asmm/binance_parser.hpp"
 #include "asmm/engine.hpp"
@@ -83,26 +86,136 @@ TEST(MarketMakerEngine, RejectsInvalidConfig) {
     EXPECT_THROW(MarketMakerEngine{c}, std::invalid_argument);
 }
 
-TEST(MarketMakerEngine, ReplaysRecordedBinanceSample) {
+std::vector<ParsedMessage> load_sample() {
     std::ifstream in(ASMM_SAMPLE_DATA);
-    ASSERT_TRUE(in.is_open()) << "missing sample: " << ASMM_SAMPLE_DATA;
-    MarketMakerEngine e(EngineConfig{});
+    std::vector<ParsedMessage> out;
     std::string line;
-    std::size_t parsed = 0;
     while (std::getline(in, line)) {
-        if (const auto msg = parse_binance_message(line)) {
-            e.on_message(*msg);
-            ++parsed;
+        if (auto msg = parse_binance_message(line)) {
+            out.push_back(std::move(*msg));
         }
     }
+    return out;
+}
+
+TEST(MarketMakerEngine, QueuePositionDelaysFillAtTouch) {
+    EngineConfig c = test_config();
+    c.as.gamma = 0.0001;
+    c.as.k = 200.0;  // узкий спред: котировки встают на лучшие цены
+    c.initial_sigma = 0.0;
+    MarketMakerEngine e(c);
+    e.on_book(BookTop{100.00, 2.0, 100.02, 3.0, 1, 1'000});
+    const EngineStats s0 = e.stats();
+    ASSERT_NEAR(s0.bid, 100.00, 1e-9);
+    ASSERT_NEAR(s0.ask, 100.02, 1e-9);
+    EXPECT_DOUBLE_EQ(s0.bid_queue, 2.0);
+    EXPECT_DOUBLE_EQ(s0.ask_queue, 3.0);
+    // Продажа 1.5 BTC по 100.00 съедает часть очереди, нас не исполняет.
+    EXPECT_EQ(e.on_trade(Trade{100.00, 1.5, true, 1, 1'100}), 0U);
+    EXPECT_NEAR(e.stats().bid_queue, 0.5, 1e-12);
+    // Ещё 0.5005: 0.5 — очередь, 0.0005 — наш частичный fill.
+    EXPECT_EQ(e.on_trade(Trade{100.00, 0.5005, true, 2, 1'200}), 1U);
+    EXPECT_NEAR(e.stats().inventory_btc, 0.0005, 1e-12);
+}
+
+TEST(MarketMakerEngine, LiquidationWalksBookWithSlippage) {
+    EngineConfig c = test_config();
+    MarketMakerEngine e(c);
+    DepthSnapshot snap;
+    snap.last_update_id = 10;
+    snap.bids = {{100.00, 0.0005}, {99.90, 0.0005}, {99.50, 1.0}};
+    snap.asks = {{100.02, 1.0}};
+    snap.ts_ms = 1'000;
+    e.on_depth_snapshot(snap);
+    e.on_book(BookTop{100.00, 0.0005, 100.02, 1.0, 10, 1'000});
+    ASSERT_EQ(e.on_trade(Trade{90.0, 1.0, true, 1, 1'100}), 1U);  // купили 1 лот по биду
+    ASSERT_NEAR(e.stats().inventory_btc, 0.001, 1e-12);
+    const auto mf = e.liquidate();
+    ASSERT_TRUE(mf.has_value());
+    EXPECT_EQ(mf->side, Side::Sell);
+    EXPECT_NEAR(mf->vwap, 99.95, 1e-9);  // 0.0005 по 100.00 + 0.0005 по 99.90
+    EXPECT_EQ(mf->levels, 2U);
+    EXPECT_NEAR(mf->slippage, (100.01 - 99.95) * 0.001, 1e-12);
     const EngineStats s = e.stats();
-    EXPECT_GT(parsed, 100U);
+    EXPECT_NEAR(s.inventory_btc, 0.0, 1e-12);
+    EXPECT_EQ(s.taker_orders, 1U);
+}
+
+TEST(MarketMakerEngine, LatencyDelaysQuotes) {
+    EngineConfig c = test_config();
+    c.exchange.latency_ms = 100;
+    MarketMakerEngine e(c);
+    e.on_book(book(100.00, 100.02, 1'000));
+    EXPECT_FALSE(e.exchange().bid().live);
+    EXPECT_EQ(e.on_trade(Trade{90.0, 1.0, true, 1, 1'050}), 0U);
+    EXPECT_EQ(e.on_trade(Trade{90.0, 1.0, true, 2, 1'100}), 1U);
+}
+
+TEST(MarketMakerEngine, ReplaysRecordedBinanceSample) {
+    const auto messages = load_sample();
+    ASSERT_GT(messages.size(), 1000U) << "missing sample: " << ASMM_SAMPLE_DATA;
+    MarketMakerEngine e(EngineConfig{});
+    for (const auto& m : messages) {
+        e.on_message(m);
+    }
+    e.liquidate();
+    const EngineStats s = e.stats();
     EXPECT_GT(s.book_updates, 100U);
-    EXPECT_GT(s.trades, 0U);
+    EXPECT_GT(s.trades, 100U);
+    EXPECT_GE(s.depth_snapshots, 1U);
+    EXPECT_GT(s.depth_updates, 100U);
+    EXPECT_EQ(s.depth_gaps, 0U);
+    EXPECT_TRUE(s.book_synced);
+    EXPECT_TRUE(s.k_calibrated);
+    EXPECT_GE(s.k, EngineConfig{}.k_min);
+    EXPECT_LE(s.k, EngineConfig{}.k_max);
     EXPECT_TRUE(std::isfinite(s.equity));
-    EXPECT_LE(std::abs(s.inventory_lots), EngineConfig{}.max_inventory_lots + 1e-9);
+    EXPECT_LE(s.max_abs_inventory_lots, EngineConfig{}.max_inventory_lots + 1e-9);
+    EXPECT_NEAR(s.inventory_btc, 0.0, 1e-12);
     // Тождество учёта: equity = cash + position * mid.
     EXPECT_NEAR(s.equity, s.cash + s.inventory_btc * s.mid, 1e-6);
+}
+
+TEST(OrderBookOnRealData, MatchesBookTickerAtSameUpdateId) {
+    // bookTicker.u и depthUpdate.u — одна последовательность id стакана Binance. bookTicker
+    // приходит в реальном времени, а depth@100ms агрегирует обновления за 100 мс, поэтому
+    // тикер с id = X приходит раньше пакета, оканчивающегося на X. После применения пакета
+    // ищем уже полученный тикер с тем же id: лучшие цены и объёмы должны совпасть точно.
+    const auto messages = load_sample();
+    OrderBook book(0.01);
+    std::map<std::uint64_t, BookTop> tickers;
+    std::size_t compared = 0;
+    std::size_t mismatched = 0;
+    std::size_t gaps = 0;
+    for (const auto& m : messages) {
+        if (m.type == MessageType::BookTicker) {
+            tickers[m.book.update_id] = m.book;
+        } else if (m.type == MessageType::DepthSnapshot) {
+            book.apply_snapshot(m.snapshot);
+        } else if (m.type == MessageType::DepthUpdate) {
+            const auto result = book.apply_update(m.depth);
+            gaps += result == BookUpdateResult::Gap ? 1U : 0U;
+            if (result != BookUpdateResult::Applied) {
+                continue;
+            }
+            const auto it = tickers.find(book.last_update_id());
+            if (it != tickers.end()) {
+                ++compared;
+                const auto top = book.top();
+                const BookTop& t = it->second;
+                if (!top || std::abs(top->bid_price - t.bid_price) > 1e-9 ||
+                    std::abs(top->ask_price - t.ask_price) > 1e-9 ||
+                    std::abs(top->bid_qty - t.bid_qty) > 1e-9 ||
+                    std::abs(top->ask_qty - t.ask_qty) > 1e-9) {
+                    ++mismatched;
+                }
+            }
+            tickers.erase(tickers.begin(), tickers.upper_bound(book.last_update_id()));
+        }
+    }
+    EXPECT_EQ(gaps, 0U);
+    EXPECT_GT(compared, 50U);
+    EXPECT_EQ(mismatched, 0U);
 }
 
 }  // namespace

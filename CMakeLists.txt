@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(as_paper_mm
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Avellaneda-Stoikov paper market making on live Binance BTCUSDT data"
     LANGUAGES CXX)
 
@@ -41,15 +41,21 @@ add_library(asmm_core
     src/volatility.cpp
     src/paper_exchange.cpp
     src/binance_parser.cpp
+    src/order_book.cpp
+    src/intensity.cpp
+    src/as_simulation.cpp
     src/engine.cpp)
 add_library(asmm::core ALIAS asmm_core)
 target_include_directories(asmm_core PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(asmm_core PUBLIC cxx_std_20)
 target_link_libraries(asmm_core PRIVATE asmm_warnings)
 
-# --- CLI-приложение ---------------------------------------------------------
+# --- CLI-приложения: paper trading и эксперимент из статьи ---------------------
 add_executable(asmm app/main.cpp)
 target_link_libraries(asmm PRIVATE asmm::core asmm_warnings)
+
+add_executable(asmm_sim app/as_simulate.cpp)
+target_link_libraries(asmm_sim PRIVATE asmm::core asmm_warnings)
 
 # --- Тесты и бенчмарки ------------------------------------------------------
 include(FetchContent)

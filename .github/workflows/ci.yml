@@ -1,4 +1,5 @@
-# CI/CD: сборка → unit-тесты → прогон на данных → бенчмарк → Doxygen → GitHub Pages.
+# CI/CD: сборка → unit-тесты → paper trading на данных → эксперимент статьи → бенчмарк →
+# Doxygen → GitHub Pages.
 # Запускается на каждый push и pull request; Pages публикуется только из ветки main.
 name: CI
 
@@ -37,8 +38,11 @@ jobs:
       - name: Unit tests (GoogleTest via ctest)
         run: ctest --test-dir build --output-on-failure --output-junit junit.xml
 
-      - name: Replay smoke run on recorded Binance BTCUSDT data
-        run: ./build/asmm --input data/sample_btcusdt.jsonl --quiet-fills --report 15
+      - name: Paper trading replay on recorded Binance BTCUSDT data (queue model, 50 ms latency)
+        run: ./build/asmm --input data/sample_btcusdt.jsonl --quiet-fills --report 30 --latency-ms 50
+
+      - name: Avellaneda-Stoikov paper reproduction (section 3.3, Tables 1-3)
+        run: ./build/asmm_sim
 
       - name: Benchmark (Google Benchmark)
         run: |

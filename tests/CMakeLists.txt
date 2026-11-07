@@ -12,6 +12,9 @@ add_executable(asmm_tests
     test_volatility.cpp
     test_paper_exchange.cpp
     test_binance_parser.cpp
+    test_order_book.cpp
+    test_intensity.cpp
+    test_as_simulation.cpp
     test_engine.cpp)
 target_link_libraries(asmm_tests PRIVATE asmm::core asmm_warnings GTest::gtest_main)
 target_compile_definitions(asmm_tests PRIVATE ASMM_SAMPLE_DATA="${ASMM_SAMPLE_DATA}")
