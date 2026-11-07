@@ -135,27 +135,29 @@ std::vector<Fill> PaperExchange::on_trade(const Trade& trade) {
         if (!through && !at_price) {
             continue;
         }
+        if (through) {
+            // Агрессор прошёл наш уровень (price-time priority): вся ликвидность на нашей
+            // цене, включая нас, уже исполнена — во всех моделях заявка исполняется целиком.
+            o.queue_ahead = 0.0;
+            fills.push_back(execute(o, o.qty, trade.ts_ms));
+            continue;
+        }
+        // Сделка ровно по нашей цене — здесь модели и различаются.
         double qty = 0.0;
         switch (config_.fill_model) {
             case FillModel::Touch:
                 qty = std::min(o.qty, available);
                 break;
             case FillModel::Through:
-                qty = through ? std::min(o.qty, available) : 0.0;
                 break;
-            case FillModel::Queue:
-                if (through) {
-                    // Агрессор прошёл наш уровень целиком — весь уровень, включая нас, исполнен.
-                    o.queue_ahead = 0.0;
-                    qty = o.qty;
-                } else {
-                    const double consumed = std::min(o.queue_ahead, available);
-                    o.queue_ahead -= consumed;
-                    available -= consumed;
-                    o.level_qty = std::max(0.0, o.level_qty - trade.qty);
-                    qty = std::min(o.qty, available);
-                }
+            case FillModel::Queue: {
+                const double consumed = std::min(o.queue_ahead, available);
+                o.queue_ahead -= consumed;
+                available -= consumed;
+                o.level_qty = std::max(0.0, o.level_qty - trade.qty);
+                qty = std::min(o.qty, available);
                 break;
+            }
         }
         if (qty > kQtyEps) {
             fills.push_back(execute(o, qty, trade.ts_ms));

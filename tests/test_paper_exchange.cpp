@@ -2,6 +2,7 @@
 
 #include <map>
 #include <utility>
+#include <vector>
 
 #include "asmm/paper_exchange.hpp"
 
@@ -206,6 +207,58 @@ TEST(QueueModel, RequoteAtSamePriceKeepsQueuePosition) {
     book.set(Side::Buy, 99.99, 7.0);
     ex.set_quotes(99.99, std::nullopt, 1.0, 0.0);
     EXPECT_DOUBLE_EQ(ex.bid().queue_ahead, 7.0);
+}
+
+TEST(QueueModel, FillModelsAreOrderedTouchQueueThrough) {
+    // Одни и те же котировки и лента сделок: исполненный объём Touch ≥ Queue ≥ Through.
+    FakeBook book;
+    book.set(Side::Buy, 100.0, 0.6);
+    book.set(Side::Sell, 101.0, 0.3);
+    const std::vector<Trade> tape{sell_aggressor(100.0, 0.4), buy_aggressor(101.0, 0.2),
+                                  sell_aggressor(100.0, 0.5), buy_aggressor(101.0, 0.4),
+                                  sell_aggressor(99.9, 0.01), buy_aggressor(101.2, 0.01)};
+    auto filled = [&](FillModel model) {
+        ExchangeConfig cfg;
+        cfg.fill_model = model;
+        PaperExchange ex(cfg);
+        ex.set_level_source([&book](Side s, double p) { return book.qty(s, p); });
+        ex.set_quotes(100.0, 101.0, 1.0, 1.0, 0);
+        double volume = 0.0;
+        for (const auto& t : tape) {
+            for (const auto& f : ex.on_trade(t)) {
+                volume += f.qty;
+            }
+        }
+        return volume;
+    };
+    const double touch = filled(FillModel::Touch);
+    const double queue = filled(FillModel::Queue);
+    const double through = filled(FillModel::Through);
+    EXPECT_GE(touch, queue);
+    EXPECT_GE(queue, through);
+    EXPECT_NEAR(touch, 2.0, 1e-12);    // 0.9 + 0.6 по своим ценам, остатки — пробоем
+    EXPECT_NEAR(queue, 2.0, 1e-12);    // пробой в конце добирает обе заявки целиком
+    EXPECT_NEAR(through, 2.0, 1e-12);  // только пробой, но он исполняет заявки целиком
+}
+
+TEST(QueueModel, PartialAtPriceFillsDifferByModel) {
+    FakeBook book;
+    book.set(Side::Buy, 100.0, 0.6);
+    const std::vector<Trade> tape{sell_aggressor(100.0, 0.4), sell_aggressor(100.0, 0.5)};
+    auto filled = [&](FillModel model) {
+        ExchangeConfig cfg;
+        cfg.fill_model = model;
+        PaperExchange ex(cfg);
+        ex.set_level_source([&book](Side s, double p) { return book.qty(s, p); });
+        ex.set_quotes(100.0, std::nullopt, 1.0, 0.0, 0);
+        for (const auto& t : tape) {
+            ex.on_trade(t);
+        }
+        return ex.position();
+    };
+    EXPECT_NEAR(filled(FillModel::Touch), 0.9, 1e-12);
+    EXPECT_NEAR(filled(FillModel::Queue), 0.3, 1e-12);  // 0.6 очереди перед нами
+    EXPECT_NEAR(filled(FillModel::Through), 0.0, 1e-12);
 }
 
 // --- Задержка ---------------------------------------------------------------
